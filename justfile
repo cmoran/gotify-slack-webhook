@@ -11,34 +11,47 @@ make:
 lint:
   golangci-lint run --fix
 
-server-mod := "gotify-server.mod"
-docker-image := "gotify-build-arm64"
-server-go-version := "1.22.4"
 plugin-name := "gotify-slack-webhook"
+build-dir := "_build"
+gotify-version := "master" # Or set to an specific version ("v.2.7.2" for example)
 
-[group('gotify')]
-build-image:
-  # This is here because the official gotify/builder images are AMD64 only and I'm on a M1 Mac Book
-  docker build . -f build.Dockerfile -t {{docker-image}} --build-arg GO_VERSION={{server-go-version}}
+# Fetches the go version from gotify/server
+get-go-version:
+    #!/usr/bin/env bash
+    set -e
+    mkdir -p {{build-dir}}
+    wget -O {{build-dir}}/gotify-server-go-version https://raw.githubusercontent.com/gotify/server/{{gotify-version}}/GO_VERSION
+    cat {{build-dir}}/gotify-server-go-version
 
-[group('gotify')]
+# Fetches go.mod from gotify/server and updates the current go.mod
+update-go-mod:
+    mkdir -p {{build-dir}}
+    wget -O {{build-dir}}/gotify-server.mod https://raw.githubusercontent.com/gotify/server/{{gotify-version}}/go.mod
+    go run github.com/gotify/plugin-api/cmd/gomod-cap -from {{build-dir}}/gotify-server.mod -to go.mod
+    go mod tidy
+
+# Builds the plugin for a specific architecture
 _build arch:
-  mkdir -p _build
-  docker run --rm -v "$PWD/.:/build" -w /build {{docker-image}} go build -mod=readonly -a -installsuffix cgo -ldflags="-w -s" -buildmode=plugin -o _build/{{plugin-name}}-{{arch}}.so
+    #!/usr/bin/env bash
+    set -e
+    mkdir -p {{build-dir}}
+    GO_VERSION=$(cat {{build-dir}}/gotify-server-go-version)
+    DOCKER_IMAGE="gotify/build:$GO_VERSION-linux-{{arch}}"
+    if [[ "{{arch}}" == "arm64" ]]; then
+        DOCKER_IMAGE="gotify-build-arm64"
+        docker build . -f build.Dockerfile -t gotify-build-arm64 --build-arg GO_VERSION=$GO_VERSION
+    fi
 
-[group('gotify')]
-build: (_build "linux-arm64")
+    docker run --rm -v "$PWD/.:/build" -w /build $DOCKER_IMAGE go build -mod=readonly -a -installsuffix cgo -ldflags="-w -s" -buildmode=plugin -o {{build-dir}}/{{plugin-name}}-linux-{{arch}}.so
 
-[group('gotify')]
+# Build all architectures
+build: _build "linux-amd64" _build "linux-arm-7" _build "linux-arm64"
+
+# Runs gotify server with the plugin
 run:
-  docker run --rm -v "$PWD/_build:/app/data/plugins" -p 8080:80 gotify/server-arm64
+  docker run --rm -v "$PWD/{{build-dir}}:/app/data/plugins" -p 8080:80 gotify/server
 
-[group('gotify')]
-download-gotify-server-mod:
-  wget -LO {{server-mod}} https://raw.githubusercontent.com/gotify/server/master/go.mod
-  echo "Also note that the Go version must match with Gotiy server (set via ASDF)"
+# Setup build environment
+setup: get-go-version update-go-mod
 
-[group('gotify')]
-verify-versions: download-gotify-server-mod
-   go run github.com/gotify/plugin-api/cmd/gomod-cap -from {{server-mod}} -to go.mod
-   go mod tidy
+.PHONY: build setup

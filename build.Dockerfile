@@ -1,13 +1,5 @@
-ARG GO_VERSION
-FROM golang:$GO_VERSION-bullseye
-RUN git config --global --add safe.directory '*'
+ARG GO_VERSION=1.25.1
+FROM golang:${GO_VERSION}-alpine
 
-RUN \
-  apt-get update && \
-  apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-
-ENV CGO_ENABLED=1
-ENV CC=aarch64-linux-gnu-gcc
-ENV CXX=aarch64-linux-gnu-g++
-ENV GOOS=linux
-ENV GOARCH=arm64
+RUN apk add --no-cache gcc musl-dev
+WORKDIR /build
